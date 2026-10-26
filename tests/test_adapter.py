@@ -92,7 +92,8 @@ async def test_tool_owns_delivery_and_never_returns_path(adapter):
     assert "local_path" not in result and "/" not in result["job_id"]
     await settle(plugin.jobs)
     assert len(event.sent) == 1
-    assert len(event.sent[0].chain) == 2
+    assert len(event.sent[0].chain) == 1
+    assert isinstance(event.sent[0].chain[0], _.Image)
     foreign = Event(owner="bob")
     denied = json.loads(await plugin.status(foreign, result["job_id"]))
     assert "error" in denied

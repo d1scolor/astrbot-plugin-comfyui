@@ -230,7 +230,7 @@ class Jobs:
             paths = [self.directory / name for name in json.loads(row["outputs"])]
             self.update(job, state="sending")
         try:
-            await sender(paths, f"Image job {job}")
+            await sender(paths, "")
         except Exception:
             # Transport could have accepted a message before the exception.
             self.update(
