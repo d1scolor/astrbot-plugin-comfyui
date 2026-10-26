@@ -5,7 +5,7 @@
 Build a new, focused AstrBot plugin. Reuse AstrBot's QQ
 adapter, personas, LLM tools and attachment APIs, and ComfyUI's existing HTTP
 and WebSocket APIs. Do not build a chatbot framework, model server or search
-engine. No plugin implementation has started.
+engine. The first implementation is present; see README.md for current capabilities and deployment validation.
 
 Initial operations:
 
@@ -25,7 +25,7 @@ official QQ adapter/API's actual capabilities; do not assume OneBot features.
 - AstrBot and ComfyUI may run on separate Docker hosts.
 - Target integration is the official QQ WebSocket adapter, not OneBot/NapCat.
 - ComfyUI runs as a non-root service with persistent model/output storage.
-- The integration was tested against AstrBot 4.29.3 and ComfyUI 0.42.0.
+- Target versions are AstrBot 4.29.3 and ComfyUI 0.42.0; the replacement has not yet had live QQ validation.
 - Service endpoints and credentials must be supplied through local configuration,
   never committed. Do not assume access to a contributor's deployment.
 - Keep GPU selection and host provisioning outside this plugin.
@@ -45,8 +45,8 @@ The core-only API workflow is in workflows/klein-text-to-image.api.json.
 Node 4.inputs.text is the positive prompt; node 5.inputs.noise_seed is the
 seed. Width/height must be updated together in nodes 8 and 9. Node 12 saves
 the result. It uses Euler, Flux2Scheduler, four steps, 1024x1024, batch one.
-This is text-to-image only. An editing/reference workflow still needs to be
-prepared and tested.
+This is text-to-image only. The implementation builds editing/reference nodes in engine/workflow.py; visual output
+validation on the target deployment is still required.
 
 A sample workflow has successfully generated images in a development
 installation. Performance depends on hardware, precision, caching and workload;
@@ -60,7 +60,7 @@ Current plugin: https://github.com/cjxzdzh/astrbot_plugin_comfyui , version
 1. It returns a local path and relies on the LLM to send the image, or to
    output a special placeholder. A completed group job was sent as a plain
    path instead of an attachment after a follow-up arrived during the wait.
-2. A hardcoded /home/ubuntu/AstrBot/... download path violated member file
+2. A hardcoded developer-machine download path violated member file
    permissions. The user patched it to /AstrBot/data/temp/comfyui and
    restarted. Private-chat image sending then succeeded.
 3. query_wait deliberately sleeps before checking completion. Source default

@@ -1,0 +1,7 @@
+name: astrbot_plugin_comfyui_direct
+display_name: ComfyUI Direct
+desc: Native Klein generation and editing with conversation-scoped jobs and direct image delivery.
+version: v0.1.0
+author: d1scolor
+repo: https://github.com/d1scolor/astrbot-plugin-comfyui
+astrbot_version: '>=4.29.3,<5'

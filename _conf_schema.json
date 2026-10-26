@@ -1,0 +1,47 @@
+{
+  "comfy_url": {
+    "description": "ComfyUI endpoint reachable from the AstrBot container (required)",
+    "type": "string",
+    "default": ""
+  },
+  "api_token": {
+    "description": "Optional ComfyUI reverse-proxy bearer token; never include in bug reports",
+    "type": "string",
+    "default": ""
+  },
+  "model": {
+    "description": "Distilled Klein 4B diffusion model filename",
+    "type": "string",
+    "default": "flux-2-klein-4b.safetensors"
+  },
+  "encoder": {
+    "description": "Text encoder filename",
+    "type": "string",
+    "default": "qwen_3_4b.safetensors"
+  },
+  "vae": {
+    "description": "VAE filename",
+    "type": "string",
+    "default": "flux2-vae.safetensors"
+  },
+  "width": {
+    "description": "Output width; multiple of 16, 256\u20131536",
+    "type": "int",
+    "default": 1024
+  },
+  "height": {
+    "description": "Output height; multiple of 16, 256\u20131536",
+    "type": "int",
+    "default": 1024
+  },
+  "job_timeout": {
+    "description": "Monitoring timeout seconds; does not interrupt the shared ComfyUI server",
+    "type": "int",
+    "default": 600
+  },
+  "queue_limit": {
+    "description": "Maximum unfinished jobs",
+    "type": "int",
+    "default": 8
+  }
+}
