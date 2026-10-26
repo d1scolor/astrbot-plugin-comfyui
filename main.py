@@ -18,7 +18,7 @@ from .engine.media import MAX_BYTES, download, normalize
 from .engine.workflow import build
 
 
-@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.1.0")
+@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.1.1")
 class ComfyDirect(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
