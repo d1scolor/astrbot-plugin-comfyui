@@ -152,3 +152,21 @@ async def test_edit_uploads_and_conditions_on_supplied_image(adapter):
     assert seen["graph"]["6"]["inputs"]["conditioning"] == ["23", 0]
     assert len(event.sent) == 1
     await plugin.jobs.close()
+
+
+@pytest.mark.parametrize("endpoint", ["", "not-a-url", "ftp://example.org"])
+async def test_unconfigured_plugin_loads_and_tools_explain_settings(adapter, endpoint):
+    import json
+
+    plugin, _ = adapter
+    await plugin.jobs.close()
+    plugin.jobs = None
+    plugin.client = None
+    plugin.config = {"comfy_url": endpoint}
+    await plugin.initialize()
+    assert plugin.jobs is None
+    result = json.loads(await plugin.generate(Event(), "a fox"))
+    assert "Configure comfy_url" in result["error"]
+    result = json.loads(await plugin.status(Event()))
+    assert "Configure comfy_url" in result["error"]
+    await plugin.terminate()

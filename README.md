@@ -48,7 +48,8 @@ Search results alone do not mean a reference image was used. The tool reports
    | `queue_limit` | Default 8 unfinished jobs |
 
 5. Enable/reload the plugin after saving the endpoint. The default endpoint is deliberately
-   blank. If initial activation fails before configuration, save settings and reload it.
+   blank. The plugin loads without it so settings remain accessible; image tools report
+   that configuration is needed until a valid endpoint has been saved.
 6. Start a new AstrBot conversation to remove old tool instructions/context. Leave member
    shell execution disabled. No changes to the Portainer stack or extra ports are needed.
 7. Try “Generate a red fox in a warm bookstore.” Verify you receive an **image attachment**.

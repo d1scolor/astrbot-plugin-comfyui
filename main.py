@@ -18,7 +18,7 @@ from .engine.media import MAX_BYTES, download, normalize
 from .engine.workflow import build
 
 
-@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.1.1")
+@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.1.2")
 class ComfyDirect(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -31,7 +31,13 @@ class ComfyDirect(Star):
         async with self.init_lock:
             if self.jobs:
                 return
-            client = ComfyClient(self.config.get("comfy_url", ""), self.config.get("api_token", ""))
+            try:
+                client = ComfyClient(
+                    self.config.get("comfy_url", ""), self.config.get("api_token", "")
+                )
+            except ValueError:
+                # First installation must load so AstrBot can expose plugin settings.
+                return
             await client.start()
             try:
                 jobs = Jobs(
@@ -95,6 +101,12 @@ class ComfyDirect(Star):
     async def submit(self, event, prompt, reference_urls, use_attached_images, edit):
         try:
             await self.initialize()
+            if not self.jobs:
+                return json.dumps(
+                    {
+                        "error": "Configure comfy_url in ComfyUI Direct settings, then reload the plugin."
+                    }
+                )
             if not isinstance(reference_urls, list) or any(
                 not isinstance(u, str) for u in reference_urls
             ):
@@ -199,6 +211,12 @@ class ComfyDirect(Star):
         """
         try:
             await self.initialize()
+            if not self.jobs:
+                return json.dumps(
+                    {
+                        "error": "Configure comfy_url in ComfyUI Direct settings, then reload the plugin."
+                    }
+                )
             origin, owner, _ = self.identity(event)
             if not job_id:
                 rows = self.jobs.db.execute(
