@@ -25,7 +25,7 @@ official QQ adapter/API's actual capabilities; do not assume OneBot features.
 - AstrBot and ComfyUI may run on separate Docker hosts.
 - Target integration is the official QQ WebSocket adapter, not OneBot/NapCat.
 - ComfyUI runs as a non-root service with persistent model/output storage.
-- Target versions are AstrBot 4.29.3 and ComfyUI 0.42.0; the replacement has not yet had live QQ validation.
+- Target versions are AstrBot 4.29.3 and ComfyUI 0.42.0; text generation and QQ delivery passed a manual smoke test. v0.2.0 image reuse still needs live validation.
 - Service endpoints and credentials must be supplied through local configuration,
   never committed. Do not assume access to a contributor's deployment.
 - Keep GPU selection and host provisioning outside this plugin.
@@ -130,3 +130,12 @@ quickly in the originating chat.
 
 Verify documentation routes and SDK APIs against deployed 4.29.3; these
 links are starting points, not guarantees of a stable interface.
+
+## v0.2.0 image library
+
+Persistent image IDs now cover generated outputs, attachments/resolved quotes and public
+URL imports. Jobs migrate automatically and index older available outputs on recovery.
+The LLM request hook adds scoped recent IDs; generation/edit tools accept explicit IDs,
+and editing defaults to the user's latest single generated output when no inputs exist.
+List/import tools support external tool composition without local paths. Retention applies
+to library copies; original job-delivery files still have manual retention. See README.

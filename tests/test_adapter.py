@@ -36,7 +36,9 @@ def adapter(monkeypatch, tmp_path):
         "astrbot.api.event": {
             "AstrMessageEvent": object,
             "MessageChain": Component,
-            "filter": SimpleNamespace(llm_tool=decorator, command=decorator),
+            "filter": SimpleNamespace(
+                llm_tool=decorator, command=decorator, on_llm_request=decorator
+            ),
         },
         "astrbot.api.message_components": {"Image": Image, "Plain": Component, "Reply": Component},
         "astrbot.api.star": {
@@ -170,3 +172,181 @@ async def test_unconfigured_plugin_loads_and_tools_explain_settings(adapter, end
     result = json.loads(await plugin.status(Event()))
     assert "Configure comfy_url" in result["error"]
     await plugin.terminate()
+
+
+async def test_generate_then_edit_previous_image_and_repeated_tool_call(adapter):
+    import json
+
+    plugin, _ = adapter
+
+    async def upload(data, name):
+        return "reused.png"
+
+    plugin.client.upload = upload
+    generated = json.loads(await plugin.generate(Event(), "fox in a library"))
+    await settle(plugin.jobs)
+    image_id = plugin.jobs.output_images(plugin.jobs.get(generated["job_id"]))[0]["id"]
+    followup = Event(message="next-turn")
+    edited = json.loads(await plugin.edit(followup, "change background to snow"))
+    assert edited["input_image_ids"] == [image_id]
+    await settle(plugin.jobs)
+    repeated = json.loads(await plugin.edit(followup, "change background to snow"))
+    assert repeated["job_id"] == edited["job_id"]
+    assert repeated["input_image_ids"] == [image_id]
+    assert plugin.client.submissions == 2
+    await plugin.jobs.close()
+
+
+async def test_explicit_id_and_model_context_are_user_scoped(adapter):
+    import json
+
+    plugin, _ = adapter
+    image = plugin.jobs.images.add(
+        "group-a", "alice", "url", "key", b"validated", "Character reference"
+    )
+
+    async def upload(data, name):
+        return "reused.png"
+
+    plugin.client.upload = upload
+    own = Event()
+    result = json.loads(await plugin.edit(own, "red scarf", image_ids=[image["id"]]))
+    assert result["input_image_ids"] == [image["id"]]
+    await settle(plugin.jobs)
+    denied = json.loads(await plugin.edit(Event(owner="bob"), "red scarf", image_ids=[image["id"]]))
+    assert "error" in denied
+    denied = json.loads(
+        await plugin.edit(Event(origin="group-b"), "red scarf", image_ids=[image["id"]])
+    )
+    assert "error" in denied
+    request = SimpleNamespace(system_prompt="Persona")
+    await plugin.image_context(own, request)
+    assert request.system_prompt.startswith("Persona")
+    assert image["id"] in request.system_prompt
+    foreign_request = SimpleNamespace(system_prompt="Persona")
+    await plugin.image_context(Event(owner="bob"), foreign_request)
+    assert image["id"] not in foreign_request.system_prompt
+    listing = json.loads(await plugin.list_images(own))
+    assert any(row["id"] == image["id"] for row in listing["images"])
+    assert all("filename" not in row and "source_key" not in row for row in listing["images"])
+    await plugin.jobs.close()
+
+
+async def test_incoming_image_is_registered_without_generation(adapter):
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    plugin, module = adapter
+    buffer = io.BytesIO()
+    PILImage.new("RGB", (16, 16)).save(buffer, "PNG")
+    event = Event()
+    event.get_messages = lambda: [module.Image("incoming")]
+    reads = []
+
+    async def attachment_bytes(component):
+        reads.append(True)
+        return buffer.getvalue()
+
+    plugin.attachment_bytes = attachment_bytes
+    request = SimpleNamespace(system_prompt="")
+    await plugin.image_context(event, request)
+    listed = json.loads(await plugin.list_images(event))
+    assert len(listed["images"]) == 1
+    assert len(reads) == 1
+    assert listed["images"][0]["id"] in request.system_prompt
+    assert plugin.client.submissions == 0
+    await plugin.jobs.close()
+
+
+async def test_ambiguous_latest_output_requires_explicit_selection(adapter):
+    import json
+
+    plugin, _ = adapter
+    for index in range(2):
+        plugin.jobs.images.add(
+            "group-a", "alice", "generated", f"samejob:{index}", b"validated", "Output"
+        )
+    result = json.loads(await plugin.edit(Event(), "make it blue"))
+    assert "multiple images" in result["error"]
+    assert plugin.client.submissions == 0
+    await plugin.jobs.close()
+
+
+async def test_search_reference_import_and_reuse_without_redownload(adapter, monkeypatch):
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    plugin, module = adapter
+    buffer = io.BytesIO()
+    PILImage.new("RGB", (16, 16), "red").save(buffer, "PNG")
+    downloads = []
+
+    async def download(url):
+        downloads.append(url)
+        return buffer.getvalue()
+
+    async def upload(data, name):
+        return "reference.png"
+
+    monkeypatch.setattr(module, "download", download)
+    plugin.client.upload = upload
+    result = json.loads(
+        await plugin.import_image(
+            Event(), "https://example.org/character.png", "Character reference"
+        )
+    )
+    image_id = result["image"]["id"]
+    assert "url" not in result["image"] and "filename" not in result["image"]
+    edited = json.loads(
+        await plugin.edit(Event(message="next"), "winter coat", image_ids=[image_id])
+    )
+    await settle(plugin.jobs)
+    assert edited["input_image_ids"] == [image_id]
+    assert len(downloads) == 1
+    await plugin.jobs.close()
+
+
+async def test_reusable_generated_handle_survives_restart(adapter):
+    import json
+
+    plugin, _ = adapter
+    backend = plugin.client
+    result = json.loads(await plugin.generate(Event(), "fox"))
+    await settle(plugin.jobs)
+    before = plugin.jobs.output_images(plugin.jobs.get(result["job_id"]))
+    directory = plugin.jobs.directory
+    await plugin.jobs.close()
+    plugin.jobs = Jobs(directory, backend)
+    await plugin.jobs.recover()
+    after = plugin.jobs.output_images(plugin.jobs.get(result["job_id"]))
+    assert before == after
+
+    async def upload(data, name):
+        return "persisted.png"
+
+    backend.upload = upload
+    edited = json.loads(await plugin.edit(Event(message="after-restart"), "snowy background"))
+    assert edited["input_image_ids"] == [before[0]["id"]]
+    await settle(plugin.jobs)
+    await plugin.jobs.close()
+
+
+async def test_edit_failure_cannot_silently_fall_back_to_text_generation(adapter):
+    import json
+
+    plugin, _ = adapter
+    event = Event()
+    failed = json.loads(await plugin.edit(event, "change its background"))
+    assert "error" in failed
+    fallback = json.loads(await plugin.generate(event, "a new similar image"))
+    assert "text-only fallback is blocked" in fallback["error"]
+    assert plugin.client.submissions == 0
+    # A new user request may intentionally ask for an unrelated text generation.
+    fresh = json.loads(await plugin.generate(Event(message="new-request"), "a new picture"))
+    assert fresh["state"] == "queued"
+    await settle(plugin.jobs)
+    await plugin.jobs.close()

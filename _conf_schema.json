@@ -43,5 +43,10 @@
     "description": "Maximum unfinished jobs",
     "type": "int",
     "default": 8
+  },
+  "image_retention_days": {
+    "description": "Reusable image lifetime in days (1\u2013365); expired library files are cleaned on startup and LLM requests",
+    "type": "int",
+    "default": 30
   }
 }

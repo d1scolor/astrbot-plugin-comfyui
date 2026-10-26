@@ -8,11 +8,15 @@ import time
 import uuid
 from pathlib import Path
 
+from .images import Images
+
 ACTIVE = {"queued", "submitting", "running", "generated", "sending"}
 
 
 class Jobs:
-    def __init__(self, directory: Path, client, timeout=600, poll=1.0, queue_limit=8):
+    def __init__(
+        self, directory: Path, client, timeout=600, poll=1.0, queue_limit=8, retention_days=30
+    ):
         directory.mkdir(parents=True, exist_ok=True)
         self.directory, self.client = directory, client
         self.timeout, self.poll, self.queue_limit = timeout, poll, queue_limit
@@ -22,7 +26,14 @@ class Jobs:
           id TEXT PRIMARY KEY, dedup TEXT UNIQUE, origin TEXT, owner TEXT,
           state TEXT, graph TEXT, prompt_id TEXT, created REAL, outputs TEXT,
           error TEXT DEFAULT '')""")
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(jobs)")}
+        if "description" not in columns:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN description TEXT DEFAULT ''")
+        if "inputs" not in columns:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN inputs TEXT DEFAULT '[]'")
         self.db.commit()
+        self.images = Images(directory, self.db, retention_days)
+        self.images.prune()
         self.tasks = {}
         self.lock = asyncio.Lock()
         self.worker = asyncio.Semaphore(1)
@@ -51,17 +62,52 @@ class Jobs:
             self.tasks[job] = task
             task.add_done_callback(lambda _: self.tasks.pop(job, None))
 
+    def output_images(self, row):
+        result = []
+        for index, name in enumerate(json.loads(row["outputs"])):
+            path = self.directory / name
+            if not path.is_file():
+                continue
+            source_key = f"{row['id']}:{index}"
+            # Do not renew expired handles when status is checked.
+            existing = self.db.execute(
+                "SELECT * FROM images WHERE origin=? AND owner=? AND source='generated' AND source_key=?",
+                (row["origin"], row["owner"], source_key),
+            ).fetchone()
+            if existing:
+                try:
+                    image = self.images.get(existing["id"], row["origin"], row["owner"])
+                except ValueError:
+                    continue
+            elif time.time() - row["created"] < self.images.ttl:
+                image = self.images.add(
+                    row["origin"],
+                    row["owner"],
+                    "generated",
+                    source_key,
+                    path.read_bytes(),
+                    f"Generated: {row.get('description', '')[:220]} (output {index + 1})",
+                )
+            else:
+                continue
+            result.append(self.images.public(image))
+        return result
+
     async def recover(self):
         # A crash between request and acknowledgement cannot be resolved safely by resubmission.
         self.db.execute("UPDATE jobs SET state='submission_unknown' WHERE state='submitting'")
         self.db.execute("UPDATE jobs SET state='delivery_unknown' WHERE state='sending'")
         self.db.commit()
         for row in self.db.execute(
+            "SELECT * FROM jobs WHERE outputs!='[]' ORDER BY created ASC"
+        ).fetchall():
+            self.output_images(dict(row))
+        for row in self.db.execute(
             "SELECT id FROM jobs WHERE state IN ('queued','running')"
         ).fetchall():
             self.spawn(row["id"])
 
-    async def enqueue(self, origin, owner, message_id, signature, graph, sender):
+    async def enqueue(self, origin, owner, message_id, signature, graph, sender, input_ids=()):
         if not origin or not owner or not message_id:
             raise ValueError("This adapter did not supply a stable request identity.")
         dedup = hashlib.sha256(
@@ -89,6 +135,11 @@ class Jobs:
                 "INSERT INTO jobs(id,dedup,origin,owner,state,graph,created,outputs) "
                 "VALUES(?,?,?,?,?,?,?,?)",
                 (job, dedup, origin, owner, "queued", json.dumps(graph), time.time(), "[]"),
+            )
+            description = signature[0] if signature and isinstance(signature[0], str) else ""
+            self.db.execute(
+                "UPDATE jobs SET description=?, inputs=? WHERE id=?",
+                (description[:300], json.dumps(list(input_ids)), job),
             )
             self.db.commit()
             self.spawn(job, sender)
@@ -142,6 +193,7 @@ class Jobs:
                             self.update(
                                 job, state="generated", outputs=json.dumps(paths), graph="{}"
                             )
+                            self.output_images(self.get(job))
                             break
                     await asyncio.sleep(self.poll)
                 else:
