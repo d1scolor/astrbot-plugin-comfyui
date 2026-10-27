@@ -583,7 +583,81 @@ async def test_inspection_uses_configured_provider_and_reports_failure(adapter):
     result = json.loads(await plugin.inspect_images(Event(), image_ids=[image["id"]]))
     assert result["inspection_completed"] is False
     assert "private provider diagnostics" not in str(result)
-    assert "images" not in result
+    assert result["images"][0]["inspected"] is False
+    assert result["errors"][0]["stage"] == "vision"
     invalid = json.loads(await plugin.inspect_images(Event(), reference_urls=["x"] * 4))
     assert invalid["inspection_completed"] is False
+    await plugin.jobs.close()
+
+
+async def test_inspection_partial_success_and_persistent_requirement(adapter, monkeypatch):
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    from engine.images import Images
+
+    plugin, module = adapter
+    buf = io.BytesIO()
+    PILImage.new("RGB", (32, 32), "red").save(buf, "PNG")
+
+    async def download(url):
+        if "blocked" in url:
+            raise ValueError("private diagnostic token must not leak")
+        if "invalid" in url:
+            return b"not an image"
+        return buf.getvalue()
+
+    async def generate(**kwargs):
+        return SimpleNamespace(completion_text="Red field.")
+
+    plugin.config["vision_provider_id"] = "vision"
+    plugin.context = SimpleNamespace(llm_generate=generate)
+    monkeypatch.setattr(module, "download", download)
+    result = json.loads(
+        await plugin.inspect_images(
+            Event(),
+            reference_urls=[
+                "https://example.org/blocked",
+                "https://example.org/invalid",
+                "https://example.org/good",
+            ],
+        )
+    )
+    assert result["status"] == "partial" and result["inspection_completed"] is True
+    assert [e["stage"] for e in result["errors"]] == ["download", "decode"]
+    assert "private diagnostic" not in str(result)
+    image_id = result["images"][0]["image_id"]
+    assert result["images"][0]["input_index"] == 2
+    reopened = Images(plugin.jobs.directory, plugin.jobs.db)
+    assert reopened.is_inspected(image_id, "group-a", "alice")
+    uninspected = reopened.add("group-a", "alice", "attachment", "other", buf.getvalue(), "other")
+    denied = json.loads(
+        await plugin.generate(
+            Event(), "red", image_ids=[uninspected["id"]], require_inspected_references=True
+        )
+    )
+    assert "not completed" in denied["error"]
+    denied = json.loads(
+        await plugin.generate(
+            Event(),
+            "red",
+            reference_urls=["https://example.org/good"],
+            require_inspected_references=True,
+        )
+    )
+    assert "explicit inspected" in denied["error"]
+
+    async def upload(data, name):
+        return name
+
+    plugin.client.upload = upload
+    reply = json.loads(
+        await plugin.generate(
+            Event(), "red", image_ids=[image_id], require_inspected_references=True
+        )
+    )
+    assert "job_id" in reply
+    await settle(plugin.jobs)
     await plugin.jobs.close()

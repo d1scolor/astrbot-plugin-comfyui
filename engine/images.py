@@ -15,6 +15,9 @@ class Images:
             id TEXT PRIMARY KEY, origin TEXT, owner TEXT, source TEXT, source_key TEXT,
             label TEXT, filename TEXT, created REAL, expires REAL,
             UNIQUE(origin, owner, source, source_key))""")
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS image_inspections (image_id TEXT PRIMARY KEY, checked REAL)"
+        )
         db.commit()
 
     def prune(self):
@@ -24,7 +27,26 @@ class Images:
         for row in rows:
             (self.directory / row["filename"]).unlink(missing_ok=True)
             self.db.execute("DELETE FROM images WHERE id=?", (row["id"],))
+        self.db.execute(
+            "DELETE FROM image_inspections WHERE image_id NOT IN (SELECT id FROM images)"
+        )
         self.db.commit()
+
+    def mark_inspected(self, image_id, origin, owner):
+        self.get(image_id, origin, owner)
+        self.db.execute(
+            "INSERT OR REPLACE INTO image_inspections VALUES(?,?)", (image_id, time.time())
+        )
+        self.db.commit()
+
+    def is_inspected(self, image_id, origin, owner):
+        self.get(image_id, origin, owner)
+        return (
+            self.db.execute(
+                "SELECT 1 FROM image_inspections WHERE image_id=?", (image_id,)
+            ).fetchone()
+            is not None
+        )
 
     def add(self, origin, owner, source, source_key, data, label):
         if not origin or not owner:

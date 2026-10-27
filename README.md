@@ -5,7 +5,7 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.5.0, deterministic captions and direct photo delivery.** SDK interfaces
+**Status: v0.5.1, deterministic captions and direct photo delivery.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
 have passed a manual deployment smoke test. Caption compositing passed a live ComfyUI synthetic-image test. New tool routing and
@@ -170,7 +170,20 @@ external URL to fetch. There are at most three images per tool call, two concurr
 batches and a 60-second timeout per provider call. Normal provider costs/latency apply.
 
 Inspection does not post reference images, start ComfyUI jobs or persist observations as
-trusted metadata. A provider failure returns an explicit error rather than guessed features.
+trusted metadata. Successful inspection timestamps persist with the image library. Each
+candidate is handled independently: responses include `completed`, `partial` or `failed`,
+real imported image IDs with `inspected` flags, and per-input errors. `input_index` refers
+to IDs first, then URLs, using zero-based indices. Download/decode/provider-selection/vision
+failures are separated with safe codes and HTTP status where available; no raw provider
+exception text, credentials or URL queries are returned. An imported but uninspected image
+can be retried by ID without downloading again. Failed candidates never receive invented IDs.
+
+Use `require_inspected_references=true` on `comfy_generate_image` for reference-grounded
+character generation. This enforces explicit owned, successfully inspected image IDs and
+rejects direct URLs, automatic attachments and uninspected inputs. It checks that inspection
+ran successfully, not that the reference identity or model observations are correct. The
+flag defaults to false so ordinary reference-conditioned generation remains available.
+The model must choose the stricter mode; no character-name classifier is implied.
 Model routing remains agent-driven: this is guidance and a usable tool, not an enforced
 research requirement for every generation. Simple original scenes need no search. If inspection
 fails, request a suitable reference rather than claiming visual verification. Reference-conditioned

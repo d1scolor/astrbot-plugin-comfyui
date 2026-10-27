@@ -158,3 +158,12 @@ conversation provider via get_current_chat_provider_id. Observations map to owne
 are untrusted and do not establish character identity. Mock tests verify provider calls;
 live vision-provider and QQ routing validation remains outstanding. No OCR/guard enforcement
 is implied by the observation prompt.
+
+## v0.5.1 inspection diagnostics
+
+Inspection now handles candidates independently, returns safe per-input stage/code errors,
+partial results and real imported IDs even on provider failure. image_inspections stores
+success timestamps (not trusted descriptions), pruned alongside expired library rows.
+Generation accepts optional require_inspected_references=true, requiring explicit owned
+inspected IDs. Default false preserves ordinary uninspected reference generation. No
+automatic character classification or guaranteed identity verification is implemented.

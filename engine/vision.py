@@ -24,3 +24,34 @@ def pixel_input(data):
         buffer = io.BytesIO()
         image.save(buffer, "JPEG", quality=90)
     return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def failure(stage, error):
+    """Return actionable codes without exception text, URLs, tokens or request bodies."""
+    import asyncio
+
+    import aiohttp
+
+    if isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+        code = "timeout"
+    elif isinstance(error, aiohttp.ClientResponseError):
+        code = "http_error"
+    elif isinstance(error, aiohttp.ClientError):
+        code = "connection_error"
+    elif stage == "download" and isinstance(error, ValueError):
+        code = "url_or_download_rejected"
+    elif stage == "decode":
+        code = "invalid_image"
+    elif stage == "provider_selection":
+        code = "provider_unavailable"
+    else:
+        code = "provider_request_failed"
+    result = {"stage": stage, "code": code}
+    status = getattr(error, "status", None)
+    if (
+        isinstance(error, aiohttp.ClientResponseError)
+        and type(status) is int
+        and 100 <= status <= 599
+    ):
+        result["http_status"] = status
+    return result
