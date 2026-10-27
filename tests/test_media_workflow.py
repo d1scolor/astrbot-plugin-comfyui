@@ -11,6 +11,11 @@ from engine.workflow import build
 @pytest.mark.parametrize(
     "url",
     [
+        "http://①②⑦.⓪.⓪.①/",
+        "http://2130706433/",
+        "http://127.1/",
+        "http://[64:ff9b::a00:1]/",
+        "http://localhost/",
         "http://224.0.0.1/a",
         "http://127.0.0.1/a",
         "http://10.0.0.1/",

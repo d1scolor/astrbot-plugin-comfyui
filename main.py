@@ -17,7 +17,7 @@ from .engine.media import MAX_BYTES, download, normalize
 from .engine.workflow import build
 
 
-@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.2.1")
+@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.2.2")
 class ComfyDirect(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -68,7 +68,9 @@ class ComfyDirect(Star):
     def sender(event):
         # Capture THIS event, not the last message received in a shared group session.
         async def send(paths, text):
-            chain = ([Plain(text)] if text else []) + [Image.fromFileSystem(str(path)) for path in paths]
+            chain = ([Plain(text)] if text else []) + [
+                Image.fromFileSystem(str(path)) for path in paths
+            ]
             await event.send(MessageChain(chain=chain))
 
         return send

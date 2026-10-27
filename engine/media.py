@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 from PIL import Image, ImageOps
+from yarl import URL
 
 MAX_BYTES = 20 * 1024 * 1024
 MAX_PIXELS = 25_000_000
@@ -16,6 +17,12 @@ MAX_PIXELS = 25_000_000
 
 def public_address(ip):
     mapped = getattr(ip, "ipv4_mapped", None)
+    if isinstance(ip, ipaddress.IPv6Address):
+        if any(
+            ip in ipaddress.ip_network(network)
+            for network in ("64:ff9b::/96", "64:ff9b:1::/48", "2002::/16", "2001::/32")
+        ):
+            return False
     return (
         ip.is_global
         and not ip.is_multicast
@@ -61,10 +68,15 @@ def validate_url(url: str):
         raise ValueError("Use an HTTP(S) reference image URL without credentials.")
     if parts.port not in (None, 80, 443):
         raise ValueError("Reference URLs must use port 80 or 443.")
-    # aiohttp bypasses resolvers for literal IPs.
+    # Match aiohttp's IDNA normalization before it can bypass the resolver.
+    host = URL(url).raw_host.rstrip(".").lower()
+    if "%" in host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        raise ValueError("Private-network reference URLs are not allowed.")
     try:
-        ip = ipaddress.ip_address(parts.hostname)
+        ip = ipaddress.ip_address(host)
     except ValueError:
+        if ":" in host or host.replace(".", "").isdigit():
+            raise ValueError("Noncanonical numeric reference hosts are not allowed.") from None
         return
     if not public_address(ip):
         raise ValueError("Private-network reference URLs are not allowed.")

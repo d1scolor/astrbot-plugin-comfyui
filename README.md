@@ -5,7 +5,7 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.2.0, persistent image reuse.** SDK interfaces
+**Status: v0.2.2, persistent image reuse.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
 have passed a manual deployment smoke test. Cross-turn image reuse and editing in this
