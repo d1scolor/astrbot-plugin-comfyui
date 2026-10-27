@@ -82,6 +82,15 @@ async def test_existing_processing_has_no_model_nodes():
 
 
 def test_long_caption_shrinks_without_huge_allocation():
-    op = plan([{"operation": "text", "text": "哭" * 200, "font_size": 0.4}], 512, 512)[0][0]
+    op = plan(
+        [{"operation": "text", "text": "哭" * 200, "font_size": 0.4, "rotation": 0}], 512, 512
+    )[0][0]
     result = Image.open(io.BytesIO(text_overlay(512, 512, op)))
     assert result.size == (512, 512)
+
+
+def test_default_caption_is_stylized_but_plain_style_stays_upright():
+    meme = plan([{"operation": "text", "text": "哭哭哦"}], 512, 512)[0][0]
+    assert meme["style"] == "meme" and meme["rotation"] == -10
+    plain = plan([{"operation": "text", "text": "字", "style": "plain_white"}], 512, 512)[0][0]
+    assert plain["rotation"] == 0

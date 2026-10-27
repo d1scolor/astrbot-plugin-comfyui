@@ -5,7 +5,7 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.4.0, deterministic captions and direct photo delivery.** SDK interfaces
+**Status: v0.4.1, deterministic captions and direct photo delivery.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
 have passed a manual deployment smoke test. Caption compositing passed a live ComfyUI synthetic-image test. New tool routing and
@@ -165,7 +165,8 @@ This preserves the underlying picture outside the operations being applied.
 
 - `text`: exact text, 1–240 characters. Nine positions combine `top`, `center`, `bottom`
   with `left`, `center`, `right`; `center` is also accepted. Font size is a fraction of
-  image height (0.02–0.40). Rotation is −180 to 180 degrees. Styles are
+  image height (0.02–0.40). Rotation is −180 to 180 degrees. Default `meme` uses larger bold text, a thicker
+  outline and a −10° tilt; explicit rotation/font size override it. Other styles are
   `white_black_outline`, `black_white_outline`, `plain_white`, `plain_black`.
   Text wraps and shrinks to fit; unsupported glyphs and unreadable layouts fail explicitly.
 - `crop`: pixel `x`, `y`, `width`, `height`, within the current canvas.
@@ -185,6 +186,11 @@ attachments without generating substitutes. Library IDs can also be sent. The pl
 provides this routing guidance and enforces download/ownership rules, but the model
 still chooses which tools and pictures match the request. Research references for a
 separate generation are not automatically sent to chat.
+
+Caption text must appear only in postprocess, not in the generative prompt/instruction.
+Duplicate literal captions are rejected before submission, and captioned generation
+receives an instruction not to add lettering. Diffusion can still invent artifacts; this
+is not guaranteed text removal from an already lettered source.
 
 For combined requests, such as “generate a fox and add 哭哭哦,” pass the caption in
 `postprocess` on the generation tool. For an existing picture, use `comfy_process_image`.

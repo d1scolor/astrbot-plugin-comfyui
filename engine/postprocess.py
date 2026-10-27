@@ -12,6 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 FONT = Path(__file__).resolve().parent.parent / "assets/fonts/NotoSansCJKsc-Bold.otf"
 STYLES = {
+    "meme": ("white", "black"),
     "white_black_outline": ("white", "black"),
     "black_white_outline": ("black", "white"),
     "plain_white": ("white", None),
@@ -67,7 +68,7 @@ def plan(operations, width, height):
                 raise ValueError(
                     "Caption position must be top/center/bottom_left/center/right, or center."
                 )
-            style = item.get("style", "white_black_outline")
+            style = item.get("style", "meme")
             if not isinstance(style, str) or style not in STYLES:
                 raise ValueError("Unknown caption style.")
             clean = {
@@ -75,8 +76,10 @@ def plan(operations, width, height):
                 "text": text,
                 "position": position,
                 "style": style,
-                "font_size": number(item.get("font_size", 0.10), 0.02, 0.4, "font_size"),
-                "rotation": number(item.get("rotation", 0), -180, 180, "rotation"),
+                "font_size": number(item.get("font_size", 0.12), 0.02, 0.4, "font_size"),
+                "rotation": number(
+                    item.get("rotation", -10 if style == "meme" else 0), -180, 180, "rotation"
+                ),
             }
         else:
             raise ValueError("Supported postprocess operations: text, crop, resize.")
@@ -113,7 +116,9 @@ def text_overlay(width, height, operation):
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     while size >= 10:
         font = ImageFont.truetype(str(FONT), size)
-        stroke = max(1, round(size * 0.08)) if outline else 0
+        stroke = (
+            max(1, round(size * (0.12 if operation["style"] == "meme" else 0.08))) if outline else 0
+        )
         lines = []
         for raw in text.split("\n"):
             line = ""

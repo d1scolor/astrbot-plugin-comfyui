@@ -21,7 +21,7 @@ from .engine.media import MAX_BYTES, download, normalize
 from .engine.workflow import build
 
 
-@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.4.0")
+@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.4.1")
 class ComfyDirect(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -162,7 +162,7 @@ class ComfyDirect(Star):
             "Do not replace a requested edit with text-only generation when an input is unavailable. "
             "Image generation/editing needs no progress announcements. Call the tool without narrating its steps. "
             "Successful image tools may return no text because the plugin delivers the result. "
-            "For exact captions/Chinese lettering use the text postprocess operation, not diffusion to draw glyphs. "
+            "For exact captions use text postprocess ONLY; never repeat caption text or lettering requests in the generative prompt/instruction. For caption-only edits use comfy_process_image. "
             "Requests to find/show/send existing pictures mean search, select direct image URLs, then call comfy_send_images. "
             "Return links alone only when links are requested. For reference research, do not send candidates prematurely. "
             "A queued job is not delivered. Do not add a sending/completion announcement or repeat the picture's description. "
@@ -309,6 +309,14 @@ class ComfyDirect(Star):
             build(prompt, seed, width, height, [], *models)
             operations = [] if postprocess is None else postprocess
             graphics.plan(operations, width, height)
+            captions = [op["text"] for op in operations if op["operation"] == "text"]
+            if any(text in prompt for text in captions):
+                raise ValueError(
+                    "Caption text is duplicated in the generative prompt/instruction. "
+                    "Remove all caption/lettering requests from that prompt and keep exact text "
+                    "only in postprocess. Describe visual edits only, then retry. "
+                    "For text-only changes use comfy_process_image without diffusion."
+                )
             if type(deliver) is not bool:
                 raise ValueError("deliver must be a boolean.")
             for url in reference_urls:
@@ -340,7 +348,10 @@ class ComfyDirect(Star):
                 await self.client.upload(image, f"direct-{secrets.token_hex(12)}.png")
                 for image in data
             ]
-            graph = build(prompt, seed, width, height, uploads, *models)
+            visual_prompt = prompt
+            if captions:
+                visual_prompt += "\nDo not add any new text, captions, letters or lettering. Captions will be composited separately."
+            graph = build(visual_prompt, seed, width, height, uploads, *models)
             if operations:
                 await graphics.append(
                     graph, ["11", 0], width, height, operations, self.client.upload
@@ -426,7 +437,7 @@ class ComfyDirect(Star):
         Exact lettering belongs here, not in an image-generation/edit prompt. Only final output is delivered.
 
         Args:
-            operations(array[object]): Up to six ordered operations. Text example: {"operation":"text","text":"哭哭哦","position":"top_right","rotation":-20,"font_size":0.10,"style":"white_black_outline"}. Positions combine top/center/bottom and left/center/right. Other styles: black_white_outline, plain_white, plain_black. Crop uses pixel x,y,width,height; resize uses width,height. Arbitrary fields/nodes/paths are rejected.
+            operations(array[object]): Up to six ordered operations. Text example: {"operation":"text","text":"哭哭哦","position":"top_right","style":"meme"}. Positions combine top/center/bottom and left/center/right. Default style meme is bold outlined white text with a slight tilt. Other styles: white_black_outline, black_white_outline, plain_white, plain_black. Crop uses pixel x,y,width,height; resize uses width,height. Arbitrary fields/nodes/paths are rejected.
             image_id(string): Owned library ID; empty selects a single attachment or your latest generated image.
             deliver(boolean): True sends final output and ends the turn in quiet mode. False keeps an intermediate for later processing/sending.
         """
@@ -548,7 +559,7 @@ class ComfyDirect(Star):
         the plugin delivers the image separately. Do not announce progress.
 
         Args:
-            prompt(string): Full visual prompt, including researched character details if needed.
+            prompt(string): Visual content only, including researched details. When using text postprocess, omit caption text and all lettering requests here; put them only in postprocess.
             reference_urls(array[string]): Public HTTP(S) image URLs obtained from other tools, up to three.
             use_attached_images(boolean): Use current/quoted images if no explicit image_ids are supplied.
             image_ids(array[string]): Ordered reusable IDs from the image library, up to three total inputs.
@@ -581,7 +592,7 @@ class ComfyDirect(Star):
         Quiet mode ends this agent turn after acceptance. Do not narrate submission or delivery.
 
         Args:
-            instruction(string): Requested edits. Refer to multiple inputs as image 1, image 2, image 3.
+            instruction(string): Visual edits only. With text postprocess, exclude caption text and lettering requests here. Example: instruction adds blue tears; postprocess alone contains 哭哭哦. Refer to inputs as image 1, image 2, image 3.
             reference_urls(array[string]): Additional public HTTP(S) image URLs, up to three total inputs.
             use_attached_images(boolean): Use current/quoted images if no explicit image_ids are supplied.
             image_ids(array[string]): Ordered reusable IDs. If no inputs are given, use this user's latest single generated image in this conversation.

@@ -489,6 +489,23 @@ async def test_generation_caption_has_single_final_save(adapter):
     assert graph["12"]["inputs"]["images"] == ["1002", 0]
     assert sum(n["class_type"] == "SaveImage" for n in graph.values()) == 1
     assert graph["1002"]["inputs"]["destination"] == ["11", 0]
+    assert "Do not add any new text" in graph["4"]["inputs"]["text"]
     await settle(plugin.jobs)
     assert len(event.sent) == 1
+    await plugin.jobs.close()
+
+
+async def test_duplicate_caption_rejected_before_generation(adapter):
+    import json
+
+    plugin, _ = adapter
+    response = json.loads(
+        await plugin.generate(
+            Event(),
+            "a fox with caption 哭哭哦",
+            postprocess=[{"operation": "text", "text": "哭哭哦"}],
+        )
+    )
+    assert "duplicated" in response["error"]
+    assert plugin.client.submissions == 0
     await plugin.jobs.close()
