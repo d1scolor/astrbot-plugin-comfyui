@@ -23,7 +23,7 @@ from .engine.vision import failure, pixel_input
 from .engine.workflow import build
 
 
-@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.5.1")
+@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.5.2")
 class ComfyDirect(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -695,17 +695,31 @@ class ComfyDirect(Star):
                 }
             )
 
+    @staticmethod
+    def visual_text(primary, alias):
+        if not isinstance(primary, str) or not isinstance(alias, str):
+            raise ValueError("prompt/instruction must be strings.")
+        primary, alias = primary.strip(), alias.strip()
+        if primary and alias and primary != alias:
+            raise ValueError(
+                "Conflicting prompt and instruction. Provide one visual description, not two different values."
+            )
+        if not primary and not alias:
+            raise ValueError("Provide a nonempty prompt (generation) or instruction (editing).")
+        return primary or alias
+
     @filter.llm_tool(name="comfy_generate_image")
     async def generate(
         self,
         event: AstrMessageEvent,
-        prompt: str,
+        prompt: str = "",
         reference_urls: list[str] | None = None,
         use_attached_images: bool = False,
         image_ids: list[str] | None = None,
         postprocess: list[dict] | None = None,
         deliver: bool = True,
         require_inspected_references: bool = False,
+        instruction: str = "",
     ) -> str | None:
         """Generate an image, optionally conditioned on references. Plugin sends the result automatically.
         Research/search belongs to other tools; a description alone is not a visual reference.
@@ -714,6 +728,7 @@ class ComfyDirect(Star):
 
         Args:
             require_inspected_references(boolean): True for reference-grounded character generation; requires successfully inspected image_ids and rejects uninspected inputs. False allows ordinary reference generation without claiming visual verification.
+            instruction(string): Compatibility alias for prompt; normally use prompt. Do not supply conflicting descriptions.
             prompt(string): Visual content only, including researched details. When using text postprocess, omit caption text and all lettering requests here; put them only in postprocess.
             reference_urls(array[string]): Public HTTP(S) image URLs obtained from other tools, up to three.
             use_attached_images(boolean): Use current/quoted images if no explicit image_ids are supplied.
@@ -721,6 +736,10 @@ class ComfyDirect(Star):
             postprocess(array[object]): Ordered text/crop/resize operations, as in comfy_process_image. Use for exact captions after generation; only the final image is sent.
             deliver(boolean): True delivers final output. False returns an intermediate job to continue working; use status wait_seconds for its image IDs.
         """
+        try:
+            prompt = self.visual_text(prompt, instruction)
+        except ValueError as error:
+            return json.dumps({"error": str(error)})
         return await self.submit(
             event,
             prompt,
@@ -737,17 +756,19 @@ class ComfyDirect(Star):
     async def edit(
         self,
         event: AstrMessageEvent,
-        instruction: str,
+        instruction: str = "",
         reference_urls: list[str] | None = None,
         use_attached_images: bool = True,
         image_ids: list[str] | None = None,
         postprocess: list[dict] | None = None,
         deliver: bool = True,
+        prompt: str = "",
     ) -> str | None:
         """Edit attached/quoted images or public image URLs. Sends results directly; never invent image inputs.
         Quiet mode ends this agent turn after acceptance. Do not narrate submission or delivery.
 
         Args:
+            prompt(string): Compatibility alias for instruction; normally use instruction. Do not supply conflicting descriptions.
             instruction(string): Visual edits only. With text postprocess, exclude caption text and lettering requests here. Example: instruction adds blue tears; postprocess alone contains 哭哭哦. Refer to inputs as image 1, image 2, image 3.
             reference_urls(array[string]): Additional public HTTP(S) image URLs, up to three total inputs.
             use_attached_images(boolean): Use current/quoted images if no explicit image_ids are supplied.
@@ -755,6 +776,11 @@ class ComfyDirect(Star):
             postprocess(array[object]): Ordered text/crop/resize operations, as in comfy_process_image. Captions are rendered after the generative edit.
             deliver(boolean): True delivers final output. False keeps an intermediate for further processing.
         """
+        try:
+            instruction = self.visual_text(instruction, prompt)
+        except ValueError as error:
+            setattr(event, "_comfy_edit_failed", True)
+            return json.dumps({"error": str(error)})
         return await self.submit(
             event,
             instruction,

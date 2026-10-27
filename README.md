@@ -5,7 +5,7 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.5.1, deterministic captions and direct photo delivery.** SDK interfaces
+**Status: v0.5.2, deterministic captions and direct photo delivery.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
 have passed a manual deployment smoke test. Caption compositing passed a live ComfyUI synthetic-image test. New tool routing and
@@ -87,6 +87,12 @@ quality and edited outputs still need live visual validation on your deployment.
 - `comfy_process_image(operations, image_id="", deliver=true)`
 - `comfy_send_images(image_ids=[], reference_urls=[])`
 - `comfy_image_status(job_id="", retry_delivery=false, wait_seconds=0)`
+
+Generation uses `prompt`; editing uses `instruction`. Both accept the other name
+as a compatibility alias, so a model mixing the argument names gets normal validation
+instead of a Python TypeError. Different nonempty values are rejected explicitly;
+missing/non-string descriptions return errors. Reference ownership and inspection
+checks still apply after alias resolution.
 
 Generated outputs receive stable image IDs as soon as they are downloaded, independently
 of the LLM turn. Job status returns output IDs; the next request's context includes recent

@@ -1,6 +1,6 @@
 [project]
 name = "astrbot-plugin-comfyui"
-version = "0.5.1"
+version = "0.5.2"
 description = "Conversation-scoped ComfyUI jobs with plugin-owned image delivery"
 requires-python = ">=3.10"
 dependencies = ["aiohttp>=3.10,<4", "Pillow>=11", "yarl>=1.12,<2", "fonttools>=4"]

@@ -661,3 +661,44 @@ async def test_inspection_partial_success_and_persistent_requirement(adapter, mo
     assert "job_id" in reply
     await settle(plugin.jobs)
     await plugin.jobs.close()
+
+
+async def test_generation_instruction_alias_keeps_inspection_check(adapter):
+    import json
+
+    plugin, _ = adapter
+    denied = json.loads(
+        await plugin.generate(Event(), instruction="a fox", require_inspected_references=True)
+    )
+    assert "inspected image_ids" in denied["error"]
+    assert plugin.client.submissions == 0
+    reply = json.loads(await plugin.generate(Event(), instruction="a fox"))
+    assert "job_id" in reply
+    await settle(plugin.jobs)
+    assert plugin.client.submissions == 1
+    await plugin.jobs.close()
+
+
+async def test_edit_prompt_alias_preserves_missing_reference_validation(adapter):
+    import json
+
+    plugin, _ = adapter
+    reply = json.loads(await plugin.edit(Event(), prompt="make it snowy"))
+    assert "requires" in reply["error"]
+    assert plugin.client.submissions == 0
+    await plugin.jobs.close()
+
+
+async def test_conflicting_and_missing_visual_arguments_return_errors(adapter):
+    import json
+
+    plugin, _ = adapter
+    for tool in (plugin.generate, plugin.edit):
+        assert (
+            "Conflicting"
+            in json.loads(await tool(Event(), prompt="fox", instruction="cat"))["error"]
+        )
+        assert "nonempty" in json.loads(await tool(Event()))["error"]
+        assert "strings" in json.loads(await tool(Event(), prompt=123))["error"]
+    assert plugin.client.submissions == 0
+    await plugin.jobs.close()
