@@ -59,7 +59,7 @@ def adapter(monkeypatch, tmp_path):
     spec = importlib.util.spec_from_file_location("test_plugin.main", root / "main.py")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    plugin = module.ComfyDirect(None, {})
+    plugin = module.ComfyDirect(None, {"quiet_image_replies": False})
     plugin.jobs = Jobs(tmp_path, Backend())
     plugin.client = plugin.jobs.client
     return plugin, module
@@ -350,4 +350,40 @@ async def test_edit_failure_cannot_silently_fall_back_to_text_generation(adapter
     fresh = json.loads(await plugin.generate(Event(message="new-request"), "a new picture"))
     assert fresh["state"] == "queued"
     await settle(plugin.jobs)
+    await plugin.jobs.close()
+
+
+async def test_quiet_default_ends_turn_but_delivers_image(adapter):
+    plugin, module = adapter
+    plugin.config = {}
+    event = Event()
+    assert await plugin.generate(event, "fox") is None
+    await settle(plugin.jobs)
+    assert len(event.sent) == 1
+    assert len(event.sent[0].chain) == 1
+    assert isinstance(event.sent[0].chain[0], module.Image)
+    # The library still exposes generated output IDs on the next request.
+    assert plugin.jobs.images.recent("group-a", "alice")[0]["source"] == "generated"
+    await plugin.jobs.close()
+
+
+async def test_quiet_edit_delivers_image_and_does_not_hide_errors(adapter):
+    import json
+
+    plugin, _ = adapter
+    plugin.config = {"quiet_image_replies": True}
+    error = json.loads(await plugin.edit(Event(), "change background"))
+    assert "error" in error
+    generated = Event(message="generation")
+    assert await plugin.generate(generated, "fox") is None
+    await settle(plugin.jobs)
+
+    async def upload(data, name):
+        return "reference.png"
+
+    plugin.client.upload = upload
+    edited = Event(message="edit")
+    assert await plugin.edit(edited, "snow") is None
+    await settle(plugin.jobs)
+    assert len(edited.sent) == 1
     await plugin.jobs.close()

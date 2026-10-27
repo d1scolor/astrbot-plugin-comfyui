@@ -5,7 +5,7 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.2.2, persistent image reuse.** SDK interfaces
+**Status: v0.3.0, persistent image reuse.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
 have passed a manual deployment smoke test. Cross-turn image reuse and editing in this
@@ -50,6 +50,7 @@ Search results alone do not mean a reference image was used. The tool reports
    | `width`, `height` | Default 1024; multiples of 16, between 256 and 1536 |
    | `job_timeout` | Default 600 seconds, including queue time |
    | `queue_limit` | Default 8 unfinished jobs |
+   | `quiet_image_replies` | Default true: accepted image tools end the agent turn; background delivery continues |
    | `image_retention_days` | Reusable image lifetime; default 30 days, range 1–365 |
 
 5. Enable/reload the plugin after saving the endpoint. The default endpoint is deliberately
@@ -109,8 +110,21 @@ Another group member cannot reuse those handles merely by knowing an ID. Explici
 cross-user sharing is not implemented; the recipient must reattach an image themselves.
 
 An empty status ID lists your five most recent jobs in the current conversation.
-The tool returns a job ID promptly. The plugin sends completion independently of the
-LLM turn, including if another message arrives. Do not configure an agent rule that
+With `quiet_image_replies=true` (default), successful generation/edit tools return no
+text. AstrBot ends the agent turn instead of asking the model for another status
+announcement. Validation errors still return normally; background failures still notify
+the requesting conversation. Library IDs and status remain available in later turns.
+Disable this option for workflows that need additional LLM/tool steps after submission,
+such as iterative inspection. In diagnostic mode (`quiet_image_replies=false`) the tool
+returns its job ID and state as before.
+
+This prevents post-submission LLM narration; it cannot recall text the model already
+sent before the tool call. For fewer chat bubbles, use AstrBot's full tool-schema mode,
+disable tool-status display, and consider non-streaming responses with intermediate
+message buffering. Buffering merges messages; it does not itself remove verbose text.
+An optional concise character persona is in [personas/erika-zh.md](personas/erika-zh.md).
+
+The plugin sends completion independently of the LLM turn, including if another message arrives. Do not configure an agent rule that
 calls `send_message_to_user` for these results or waits using the old plugin's tools.
 
 No manual persona/system-prompt changes are required. The plugin supplies tool schemas

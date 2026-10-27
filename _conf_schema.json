@@ -48,5 +48,11 @@
     "description": "Reusable image lifetime in days (1\u2013365); expired library files are cleaned on startup and LLM requests",
     "type": "int",
     "default": 30
+  },
+  "quiet_image_replies": {
+    "description": "Quiet image replies: deliver images without a follow-up LLM status message",
+    "type": "bool",
+    "default": true,
+    "hint": "Ends the agent turn after an image job is accepted. Disable for workflows needing further tool calls after submission. Validation errors still return normally."
   }
 }
