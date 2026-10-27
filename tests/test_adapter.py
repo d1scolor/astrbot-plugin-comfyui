@@ -387,3 +387,108 @@ async def test_quiet_edit_delivers_image_and_does_not_hide_errors(adapter):
     await settle(plugin.jobs)
     assert len(edited.sent) == 1
     await plugin.jobs.close()
+
+
+async def test_search_picture_delivery_uses_attachments_without_comfy_generation(
+    adapter, monkeypatch
+):
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    plugin, module = adapter
+    source = io.BytesIO()
+    PILImage.new("RGB", (32, 24), "blue").save(source, "PNG")
+
+    async def download(url):
+        return source.getvalue()
+
+    monkeypatch.setattr(module, "download", download)
+    plugin.config = {"quiet_image_replies": True}
+    event = Event()
+    assert await plugin.send_images(event, reference_urls=["https://example.org/photo.png"]) is None
+    await settle(plugin.jobs)
+    assert len(event.sent) == 1 and len(event.sent[0].chain) == 1
+    assert plugin.client.submissions == 0
+    rows = plugin.jobs.images.recent("group-a", "alice")
+    assert len(rows) == 1 and rows[0]["source"] == "url"
+    # Same tool call is deduplicated even after delivery.
+    await plugin.send_images(event, image_ids=[], reference_urls=["https://example.org/photo.png"])
+    await settle(plugin.jobs)
+    assert len(event.sent) == 1
+    denied = json.loads(await plugin.send_images(Event(owner="bob"), image_ids=[rows[0]["id"]]))
+    assert "error" in denied
+    await plugin.jobs.close()
+
+
+async def test_intermediate_generation_is_not_delivered_by_status(adapter):
+    import json
+
+    plugin, _ = adapter
+    plugin.config = {"quiet_image_replies": True}
+    event = Event()
+    result = json.loads(await plugin.generate(event, "fox", deliver=False))
+    await settle(plugin.jobs)
+    assert not event.sent
+    status = json.loads(await plugin.status(event, result["job_id"]))
+    assert status["state"] == "generated" and len(status["output_images"]) == 1
+    assert not event.sent
+    image_id = status["output_images"][0]["id"]
+    assert await plugin.send_images(Event(message="next"), image_ids=[image_id]) is None
+    await settle(plugin.jobs)
+    assert plugin.client.submissions == 1
+    await plugin.jobs.close()
+
+
+async def test_caption_existing_image_then_deliver(adapter):
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    plugin, _ = adapter
+    buf = io.BytesIO()
+    PILImage.new("RGB", (512, 512), "blue").save(buf, "PNG")
+    image = plugin.jobs.images.add(
+        "group-a", "alice", "attachment", "input", buf.getvalue(), "Input"
+    )
+    seen = []
+
+    async def upload(data, name):
+        seen.append((data, name))
+        return name
+
+    plugin.client.upload = upload
+    event = Event()
+    result = json.loads(
+        await plugin.process_image(event, [{"operation": "text", "text": "哭哭哦"}], image["id"])
+    )
+    graph = json.loads(plugin.jobs.get(result["job_id"])["graph"])
+    assert graph["1002"]["class_type"] == "ImageCompositeMasked"
+    assert not any("Sampler" in n["class_type"] for n in graph.values())
+    await settle(plugin.jobs)
+    assert len(seen) == 2 and len(event.sent) == 1
+    await plugin.jobs.close()
+
+
+async def test_generation_caption_has_single_final_save(adapter):
+    import json
+
+    plugin, _ = adapter
+
+    async def upload(data, name):
+        return name
+
+    plugin.client.upload = upload
+    event = Event()
+    reply = json.loads(
+        await plugin.generate(event, "a fox", postprocess=[{"operation": "text", "text": "哭哭哦"}])
+    )
+    graph = json.loads(plugin.jobs.get(reply["job_id"])["graph"])
+    assert graph["12"]["inputs"]["images"] == ["1002", 0]
+    assert sum(n["class_type"] == "SaveImage" for n in graph.values()) == 1
+    assert graph["1002"]["inputs"]["destination"] == ["11", 0]
+    await settle(plugin.jobs)
+    assert len(event.sent) == 1
+    await plugin.jobs.close()

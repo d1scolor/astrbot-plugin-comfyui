@@ -2,22 +2,26 @@
 
 import asyncio
 import base64
+import io
 import json
 import secrets
+import time
 from pathlib import Path
 
 from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.message_components import Image, Plain, Reply
 from astrbot.api.star import Context, Star, StarTools, register
+from PIL import Image as PILImage
 
+from .engine import postprocess as graphics
 from .engine.client import ComfyClient
 from .engine.jobs import Jobs
 from .engine.media import MAX_BYTES, download, normalize
 from .engine.workflow import build
 
 
-@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.3.0")
+@register("astrbot_plugin_comfyui_direct", "d1scolor", "Direct ComfyUI image jobs", "0.4.0")
 class ComfyDirect(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
@@ -158,6 +162,9 @@ class ComfyDirect(Star):
             "Do not replace a requested edit with text-only generation when an input is unavailable. "
             "Image generation/editing needs no progress announcements. Call the tool without narrating its steps. "
             "Successful image tools may return no text because the plugin delivers the result. "
+            "For exact captions/Chinese lettering use the text postprocess operation, not diffusion to draw glyphs. "
+            "Requests to find/show/send existing pictures mean search, select direct image URLs, then call comfy_send_images. "
+            "Return links alone only when links are requested. For reference research, do not send candidates prematurely. "
             "A queued job is not delivered. Do not add a sending/completion announcement or repeat the picture's description. "
             + note
             + "\n"
@@ -229,7 +236,15 @@ class ComfyDirect(Star):
             )
 
     async def submit(
-        self, event, prompt, reference_urls, use_attached_images, edit, image_ids=None
+        self,
+        event,
+        prompt,
+        reference_urls,
+        use_attached_images,
+        edit,
+        image_ids=None,
+        postprocess=None,
+        deliver=True,
     ):
         try:
             await self.initialize()
@@ -292,6 +307,10 @@ class ComfyDirect(Star):
                 )
             ]
             build(prompt, seed, width, height, [], *models)
+            operations = [] if postprocess is None else postprocess
+            graphics.plan(operations, width, height)
+            if type(deliver) is not bool:
+                raise ValueError("deliver must be a boolean.")
             for url in reference_urls:
                 data = await asyncio.to_thread(normalize, await download(url))
                 selected.append(
@@ -313,6 +332,8 @@ class ComfyDirect(Star):
                     "image_ids": image_ids,
                     "reference_urls": reference_urls,
                     "use_attached_images": use_attached_images,
+                    "postprocess": operations,
+                    "deliver": deliver,
                 },
             ]
             uploads = [
@@ -320,6 +341,10 @@ class ComfyDirect(Star):
                 for image in data
             ]
             graph = build(prompt, seed, width, height, uploads, *models)
+            if operations:
+                await graphics.append(
+                    graph, ["11", 0], width, height, operations, self.client.upload
+                )
             origin, owner, message_id = self.identity(event)
             row = await self.jobs.enqueue(
                 origin,
@@ -329,30 +354,9 @@ class ComfyDirect(Star):
                 graph,
                 self.sender(event),
                 input_ids=[image["id"] for image in selected],
+                auto_deliver=deliver,
             )
-            if self.config.get("quiet_image_replies", True) and row["state"] in {
-                "queued",
-                "submitting",
-                "running",
-                "generated",
-                "sending",
-                "delivered",
-            }:
-                # AstrBot treats a None tool result as the end of the agent turn.
-                # The background job owns delivery; do not request another LLM
-                # completion merely to narrate its status.
-                return None
-            return json.dumps(
-                {
-                    "job_id": row["id"],
-                    "state": row["state"],
-                    "reference_count": len(json.loads(row["inputs"])),
-                    "input_image_ids": json.loads(row["inputs"]),
-                    "output_images": self.jobs.output_images(row),
-                    "delivery": "Plugin sends image automatically. Do not send paths, "
-                    "call send_message_to_user, wait tools or claim delivery before state=delivered.",
-                }
-            )
+            return self.job_reply(row)
         except ValueError as error:
             if edit:
                 event._comfy_edit_failed = True
@@ -364,6 +368,169 @@ class ComfyDirect(Star):
                 }
             )
 
+    def job_reply(self, row):
+        if (
+            row["auto_deliver"]
+            and self.config.get("quiet_image_replies", True)
+            and row["state"]
+            in {"queued", "submitting", "running", "generated", "sending", "delivered"}
+        ):
+            return None
+        return json.dumps(
+            {
+                "job_id": row["id"],
+                "state": row["state"],
+                "reference_count": len(json.loads(row["inputs"])),
+                "input_image_ids": json.loads(row["inputs"]),
+                "output_images": self.jobs.output_images(row),
+                "delivery": (
+                    "Plugin delivers automatically. Do not narrate progress or send again."
+                    if row["auto_deliver"]
+                    else "Intermediate output: not sent. Use comfy_image_status with wait_seconds to obtain image IDs; then process or send final images."
+                ),
+            }
+        )
+
+    async def one_image(self, event, image_id):
+        origin, owner, _ = self.identity(event)
+        if image_id:
+            return self.jobs.images.get(image_id, origin, owner)
+        current = await self.capture(event)
+        if len(current) == 1:
+            return current[0]
+        if len(current) > 1:
+            raise ValueError(
+                "Multiple attached images. Select an explicit image_id from comfy_list_images."
+            )
+        rows = [
+            row
+            for row in self.jobs.images.recent(origin, owner, limit=100)
+            if row["source"] == "generated"
+        ]
+        if not rows:
+            raise ValueError("Provide an image_id or attach an image to process.")
+        prefix = rows[0]["source_key"].split(":")[0]
+        if sum(row["source_key"].split(":")[0] == prefix for row in rows) != 1:
+            raise ValueError("Latest output is ambiguous. Select an explicit image_id.")
+        return rows[0]
+
+    @filter.llm_tool(name="comfy_process_image")
+    async def process_image(
+        self,
+        event: AstrMessageEvent,
+        operations: list[dict],
+        image_id: str = "",
+        deliver: bool = True,
+    ) -> str | None:
+        """Apply deterministic text/crop/resize to an existing image through ComfyUI. No diffusion pass.
+        Exact lettering belongs here, not in an image-generation/edit prompt. Only final output is delivered.
+
+        Args:
+            operations(array[object]): Up to six ordered operations. Text example: {"operation":"text","text":"哭哭哦","position":"top_right","rotation":-20,"font_size":0.10,"style":"white_black_outline"}. Positions combine top/center/bottom and left/center/right. Other styles: black_white_outline, plain_white, plain_black. Crop uses pixel x,y,width,height; resize uses width,height. Arbitrary fields/nodes/paths are rejected.
+            image_id(string): Owned library ID; empty selects a single attachment or your latest generated image.
+            deliver(boolean): True sends final output and ends the turn in quiet mode. False keeps an intermediate for later processing/sending.
+        """
+        try:
+            await self.initialize()
+            if not self.jobs:
+                raise ValueError("Configure comfy_url in ComfyUI Direct settings.")
+            if not operations:
+                raise ValueError(
+                    "Provide at least one operation, or use comfy_send_images to send an unchanged picture."
+                )
+            if type(deliver) is not bool:
+                raise ValueError("deliver must be a boolean.")
+            image = await self.one_image(event, image_id)
+            origin, owner, message_id = self.identity(event)
+            data = self.jobs.images.data(image["id"], origin, owner)
+            with PILImage.open(io.BytesIO(data)) as source:
+                width, height = source.size
+            graphics.plan(operations, width, height)
+            # Validate/render captions before submitting a GPU/server job.
+            filename = await self.client.upload(data, f"process-{secrets.token_hex(12)}.png")
+            graph = graphics.existing(filename)
+            await graphics.append(graph, ["1", 0], width, height, operations, self.client.upload)
+            row = await self.jobs.enqueue(
+                origin,
+                owner,
+                message_id,
+                ["Process image", image["id"], operations, deliver],
+                graph,
+                self.sender(event),
+                input_ids=[image["id"]],
+                kind="process",
+                auto_deliver=deliver,
+            )
+            return self.job_reply(row)
+        except ValueError as error:
+            return json.dumps({"error": str(error)})
+        except Exception:
+            return json.dumps(
+                {"error": "Image processing failed. Check ComfyUI connectivity and configuration."}
+            )
+
+    @filter.llm_tool(name="comfy_send_images")
+    async def send_images(
+        self,
+        event: AstrMessageEvent,
+        image_ids: list[str] | None = None,
+        reference_urls: list[str] | None = None,
+    ) -> str | None:
+        """Send actual existing pictures as chat attachments, without generating replacements.
+        Use after image search when the user asks to find/show/send pictures. Select up to three direct image URLs or owned IDs. Do not send reference candidates when the user only requested research for a generation.
+
+        Args:
+            image_ids(array[string]): Owned library image IDs to send, up to three total images.
+            reference_urls(array[string]): Direct public image URLs selected from search results, up to three total images. Page URLs are not image inputs.
+        """
+        try:
+            await self.initialize()
+            if not self.jobs:
+                raise ValueError("Configure comfy_url in ComfyUI Direct settings.")
+            ids, urls = image_ids or [], reference_urls or []
+            if (
+                not isinstance(ids, list)
+                or not isinstance(urls, list)
+                or any(not isinstance(v, str) for v in ids + urls)
+            ):
+                raise ValueError("Use lists of owned image IDs and public image URLs.")
+            if not 1 <= len(ids) + len(urls) <= 3:
+                raise ValueError("Select one to three pictures to send.")
+            origin, owner, message_id = self.identity(event)
+            selected = [self.jobs.images.get(i, origin, owner) for i in ids]
+            for url in urls:
+                data = await asyncio.to_thread(normalize, await download(url))
+                selected.append(
+                    self.jobs.images.add(
+                        origin,
+                        owner,
+                        "url",
+                        self.jobs.images.content_key(data),
+                        data,
+                        "Public image selected for chat delivery",
+                    )
+                )
+            selected = list({image["id"]: image for image in selected}.values())
+            row = await self.jobs.enqueue(
+                origin,
+                owner,
+                message_id,
+                ["Send pictures", ids, urls],
+                {},
+                self.sender(event),
+                input_ids=[image["id"] for image in selected],
+                kind="delivery",
+            )
+            return self.job_reply(row)
+        except ValueError as error:
+            return json.dumps({"error": str(error)})
+        except Exception:
+            return json.dumps(
+                {
+                    "error": "Could not retrieve/send the selected pictures. Use direct public image URLs."
+                }
+            )
+
     @filter.llm_tool(name="comfy_generate_image")
     async def generate(
         self,
@@ -372,6 +539,8 @@ class ComfyDirect(Star):
         reference_urls: list[str] | None = None,
         use_attached_images: bool = False,
         image_ids: list[str] | None = None,
+        postprocess: list[dict] | None = None,
+        deliver: bool = True,
     ) -> str | None:
         """Generate an image, optionally conditioned on references. Plugin sends the result automatically.
         Research/search belongs to other tools; a description alone is not a visual reference.
@@ -383,9 +552,18 @@ class ComfyDirect(Star):
             reference_urls(array[string]): Public HTTP(S) image URLs obtained from other tools, up to three.
             use_attached_images(boolean): Use current/quoted images if no explicit image_ids are supplied.
             image_ids(array[string]): Ordered reusable IDs from the image library, up to three total inputs.
+            postprocess(array[object]): Ordered text/crop/resize operations, as in comfy_process_image. Use for exact captions after generation; only the final image is sent.
+            deliver(boolean): True delivers final output. False returns an intermediate job to continue working; use status wait_seconds for its image IDs.
         """
         return await self.submit(
-            event, prompt, reference_urls or [], use_attached_images, False, image_ids
+            event,
+            prompt,
+            reference_urls or [],
+            use_attached_images,
+            False,
+            image_ids,
+            postprocess,
+            deliver,
         )
 
     @filter.llm_tool(name="comfy_edit_image")
@@ -396,6 +574,8 @@ class ComfyDirect(Star):
         reference_urls: list[str] | None = None,
         use_attached_images: bool = True,
         image_ids: list[str] | None = None,
+        postprocess: list[dict] | None = None,
+        deliver: bool = True,
     ) -> str | None:
         """Edit attached/quoted images or public image URLs. Sends results directly; never invent image inputs.
         Quiet mode ends this agent turn after acceptance. Do not narrate submission or delivery.
@@ -405,20 +585,34 @@ class ComfyDirect(Star):
             reference_urls(array[string]): Additional public HTTP(S) image URLs, up to three total inputs.
             use_attached_images(boolean): Use current/quoted images if no explicit image_ids are supplied.
             image_ids(array[string]): Ordered reusable IDs. If no inputs are given, use this user's latest single generated image in this conversation.
+            postprocess(array[object]): Ordered text/crop/resize operations, as in comfy_process_image. Captions are rendered after the generative edit.
+            deliver(boolean): True delivers final output. False keeps an intermediate for further processing.
         """
         return await self.submit(
-            event, instruction, reference_urls or [], use_attached_images, True, image_ids
+            event,
+            instruction,
+            reference_urls or [],
+            use_attached_images,
+            True,
+            image_ids,
+            postprocess,
+            deliver,
         )
 
     @filter.llm_tool(name="comfy_image_status")
     async def status(
-        self, event: AstrMessageEvent, job_id: str = "", retry_delivery: bool = False
+        self,
+        event: AstrMessageEvent,
+        job_id: str = "",
+        retry_delivery: bool = False,
+        wait_seconds: int = 0,
     ) -> str:
         """Check your own job in this conversation. Recover completed images after a restart.
 
         Args:
             job_id(string): Job ID returned by generation/edit, or empty to list your recent jobs.
             retry_delivery(boolean): Only true if user explicitly requested delivery retry; uncertain sends can duplicate.
+            wait_seconds(number): Optional bounded wait (0–20) for an intermediate job; checks immediately and returns as soon as ready. Default zero never waits.
         """
         try:
             await self.initialize()
@@ -448,7 +642,13 @@ class ComfyDirect(Star):
                     }
                 )
             row = self.jobs.owned(job_id, origin, owner)
-            if row["state"] == "generated" or retry_delivery:
+            deadline = time.monotonic() + min(20, max(0, float(wait_seconds)))
+            while (
+                row["state"] in {"queued", "submitting", "running"} and time.monotonic() < deadline
+            ):
+                await asyncio.sleep(min(0.25, deadline - time.monotonic()))
+                row = self.jobs.owned(job_id, origin, owner)
+            if (row["state"] == "generated" and row["auto_deliver"]) or retry_delivery:
                 await self.jobs.deliver(job_id, self.sender(event), allow_retry=retry_delivery)
             row = self.jobs.owned(job_id, origin, owner)
             return json.dumps(

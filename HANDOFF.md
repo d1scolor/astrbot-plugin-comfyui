@@ -139,3 +139,13 @@ The LLM request hook adds scoped recent IDs; generation/edit tools accept explic
 and editing defaults to the user's latest single generated output when no inputs exist.
 List/import tools support external tool composition without local paths. Retention applies
 to library copies; original job-delivery files still have manual retention. See README.
+
+## v0.4.0 additions
+
+Deterministic caption/crop/resize operations live in engine/postprocess.py. Captions use
+bundled OFL Noto CJK and Pillow; ComfyUI core nodes composite with inverted LoadImage
+mask. Generation/edit accepts postprocess; comfy_process_image skips diffusion.
+comfy_send_images delivers selected public URLs or owned image IDs without generation.
+Optional deliver=false retains intermediates; status never auto-sends these. Existing
+SQLite databases migrate kind/auto_deliver columns. New behavior needs AstrBot smoke
+testing; a synthetic caption passed live ComfyUI validation without sending QQ messages.

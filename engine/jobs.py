@@ -31,6 +31,10 @@ class Jobs:
             self.db.execute("ALTER TABLE jobs ADD COLUMN description TEXT DEFAULT ''")
         if "inputs" not in columns:
             self.db.execute("ALTER TABLE jobs ADD COLUMN inputs TEXT DEFAULT '[]'")
+        if "kind" not in columns:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN kind TEXT DEFAULT 'generate'")
+        if "auto_deliver" not in columns:
+            self.db.execute("ALTER TABLE jobs ADD COLUMN auto_deliver INTEGER DEFAULT 1")
         self.db.commit()
         self.images = Images(directory, self.db, retention_days)
         self.images.prune()
@@ -64,6 +68,15 @@ class Jobs:
 
     def output_images(self, row):
         result = []
+        if row.get("kind") == "delivery":
+            for image_id in json.loads(row["inputs"]):
+                try:
+                    result.append(
+                        self.images.public(self.images.get(image_id, row["origin"], row["owner"]))
+                    )
+                except ValueError:
+                    continue
+            return result
         for index, name in enumerate(json.loads(row["outputs"])):
             path = self.directory / name
             if not path.is_file():
@@ -107,7 +120,18 @@ class Jobs:
         ).fetchall():
             self.spawn(row["id"])
 
-    async def enqueue(self, origin, owner, message_id, signature, graph, sender, input_ids=()):
+    async def enqueue(
+        self,
+        origin,
+        owner,
+        message_id,
+        signature,
+        graph,
+        sender,
+        input_ids=(),
+        kind="generate",
+        auto_deliver=True,
+    ):
         if not origin or not owner or not message_id:
             raise ValueError("This adapter did not supply a stable request identity.")
         dedup = hashlib.sha256(
@@ -119,7 +143,7 @@ class Jobs:
                 return self.get(previous["id"])
             count = self.db.execute(
                 "SELECT count(*) FROM jobs WHERE state IN "
-                "('queued','submitting','running','generated','sending')"
+                "('queued','submitting','running','sending') OR (state='generated' AND auto_deliver=1)"
             ).fetchone()[0]
             if count >= self.queue_limit:
                 raise ValueError("Image queue is full; try again after existing jobs finish.")
@@ -138,8 +162,8 @@ class Jobs:
             )
             description = signature[0] if signature and isinstance(signature[0], str) else ""
             self.db.execute(
-                "UPDATE jobs SET description=?, inputs=? WHERE id=?",
-                (description[:300], json.dumps(list(input_ids)), job),
+                "UPDATE jobs SET description=?, inputs=?, kind=?, auto_deliver=? WHERE id=?",
+                (description[:300], json.dumps(list(input_ids)), kind, int(auto_deliver), job),
             )
             self.db.commit()
             self.spawn(job, sender)
@@ -147,6 +171,20 @@ class Jobs:
 
     async def run(self, job, sender=None):
         try:
+            row = self.get(job)
+            if row["kind"] == "delivery":
+                if row["state"] != "queued":
+                    return
+                paths = []
+                for index, image_id in enumerate(json.loads(row["inputs"])):
+                    data = self.images.data(image_id, row["origin"], row["owner"])
+                    path = self.directory / f"{job}-{index}.png"
+                    path.write_bytes(data)
+                    paths.append(path.name)
+                self.update(job, state="generated", outputs=json.dumps(paths), graph="{}")
+                if sender:
+                    await self.deliver(job, sender)
+                return
             async with self.worker:
                 row = self.get(job)
                 if row["state"] not in ("queued", "running"):
@@ -203,7 +241,7 @@ class Jobs:
                         error="Monitoring timed out; server job may still run.",
                     )
                     return
-            if sender:
+            if sender and self.get(job)["auto_deliver"]:
                 await self.deliver(job, sender)
         except asyncio.CancelledError:
             raise

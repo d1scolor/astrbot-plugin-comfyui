@@ -5,11 +5,11 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.3.0, persistent image reuse.** SDK interfaces
+**Status: v0.4.0, deterministic captions and direct photo delivery.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
-have passed a manual deployment smoke test. Cross-turn image reuse and editing in this
-release still need a live smoke test.
+have passed a manual deployment smoke test. Caption compositing passed a live ComfyUI synthetic-image test. New tool routing and
+attachment delivery still need a smoke test in your AstrBot deployment.
 
 ## What works
 
@@ -83,7 +83,9 @@ quality and edited outputs still need live visual validation on your deployment.
 - `comfy_edit_image(instruction, reference_urls=[], use_attached_images=true, image_ids=[])`
 - `comfy_list_images(limit=20, offset=0)`
 - `comfy_import_image(reference_url, label="")`
-- `comfy_image_status(job_id="", retry_delivery=false)`
+- `comfy_process_image(operations, image_id="", deliver=true)`
+- `comfy_send_images(image_ids=[], reference_urls=[])`
+- `comfy_image_status(job_id="", retry_delivery=false, wait_seconds=0)`
 
 Generated outputs receive stable image IDs as soon as they are downloaded, independently
 of the LLM turn. Job status returns output IDs; the next request's context includes recent
@@ -114,8 +116,9 @@ With `quiet_image_replies=true` (default), successful generation/edit tools retu
 text. AstrBot ends the agent turn instead of asking the model for another status
 announcement. Validation errors still return normally; background failures still notify
 the requesting conversation. Library IDs and status remain available in later turns.
-Disable this option for workflows that need additional LLM/tool steps after submission,
-such as iterative inspection. In diagnostic mode (`quiet_image_replies=false`) the tool
+For further tool steps after submission, pass `deliver=false` on generation, editing or
+processing. Status with `wait_seconds` (0–20) returns output IDs without sending intermediate
+images. Process those IDs or call `comfy_send_images` when the final result is ready. In diagnostic mode (`quiet_image_replies=false`) the tool
 returns its job ID and state as before.
 
 This prevents post-submission LLM narration; it cannot recall text the model already
@@ -144,6 +147,57 @@ reattach the image. Account-avatar retrieval is not implemented. No OneBot-speci
 is assumed. References from an older message can be reattached/quoted or provided as a URL;
 older images can instead be selected by ID from `comfy_list_images`. There is no global
 “last image” shared between users.
+
+## Captions, processing and existing photos
+
+Generation and edit tools accept `postprocess`, an ordered list of up to six operations.
+The operations run after the generative step in the same ComfyUI graph; only the final
+image is saved/sent. `comfy_process_image` applies the same operations to an existing
+library image, a single attachment or the latest generated image, without diffusion.
+This preserves the underlying picture outside the operations being applied.
+
+```json
+[
+  {"operation": "text", "text": "哭哭哦", "position": "top_right",
+   "rotation": -20, "font_size": 0.10, "style": "white_black_outline"}
+]
+```
+
+- `text`: exact text, 1–240 characters. Nine positions combine `top`, `center`, `bottom`
+  with `left`, `center`, `right`; `center` is also accepted. Font size is a fraction of
+  image height (0.02–0.40). Rotation is −180 to 180 degrees. Styles are
+  `white_black_outline`, `black_white_outline`, `plain_white`, `plain_black`.
+  Text wraps and shrinks to fit; unsupported glyphs and unreadable layouts fail explicitly.
+- `crop`: pixel `x`, `y`, `width`, `height`, within the current canvas.
+- `resize`: integer `width`, `height` (16–4096); changes aspect ratio if requested.
+
+Each resulting canvas is limited to 4096 pixels per side and 8 megapixels. Crop/resize
+an oversized source first. Text uses the bundled Noto Sans CJK SC Bold font
+([license and provenance](assets/fonts/NOTICE.md)). Pillow renders the transparent glyph
+layer; core ComfyUI nodes perform compositing, crop and resize. No custom node pack,
+shell access or font installation is needed. Arbitrary fonts, nodes and scripts cannot
+be supplied through these tools. Complex typography and arbitrary graphics are outside
+this version's scope.
+
+For “find/show/send me pictures,” the agent should search, choose up to three direct
+public image URLs, then call `comfy_send_images`. This sends existing photos as actual
+attachments without generating substitutes. Library IDs can also be sent. The plugin
+provides this routing guidance and enforces download/ownership rules, but the model
+still chooses which tools and pictures match the request. Research references for a
+separate generation are not automatically sent to chat.
+
+For combined requests, such as “generate a fox and add 哭哭哦,” pass the caption in
+`postprocess` on the generation tool. For an existing picture, use `comfy_process_image`.
+For a longer chain, create intermediates with `deliver=false`, wait/check status for their
+image IDs, and send/process the selected final image. Only final tools with `deliver=true`
+end the turn in quiet mode.
+
+Emoji use is conversational style: edit the active AstrBot persona, for example:
+
+> 不使用 emoji、颜文字或装饰性图标。情绪通过措辞表达。
+
+The bundled persona template includes this rule; updating the plugin does not overwrite
+an existing persona. The plugin does not strip requested caption text or all chat messages.
 
 ## Recovery and failure behavior
 
