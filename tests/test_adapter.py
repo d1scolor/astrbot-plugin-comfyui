@@ -509,3 +509,81 @@ async def test_duplicate_caption_rejected_before_generation(adapter):
     assert "duplicated" in response["error"]
     assert plugin.client.submissions == 0
     await plugin.jobs.close()
+
+
+async def test_inspection_passes_pixels_without_tools_and_reuses_ids(adapter, monkeypatch):
+    import base64
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    plugin, module = adapter
+    buf = io.BytesIO()
+    PILImage.new("RGB", (1800, 900), "blue").save(buf, "PNG")
+    calls = []
+
+    async def download(url):
+        return buf.getvalue()
+
+    async def provider(origin):
+        assert origin == "group-a"
+        return "current-vision"
+
+    async def generate(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(completion_text="Blue background, no visible person.")
+
+    monkeypatch.setattr(module, "download", download)
+    plugin.context = SimpleNamespace(get_current_chat_provider_id=provider, llm_generate=generate)
+    event = Event()
+    result = json.loads(
+        await plugin.inspect_images(
+            event,
+            reference_urls=["https://example.org/reference.png"],
+            topic="Unverified character",
+        )
+    )
+    assert result["trusted"] is False and result["identity_verified"] is False
+    image_id = result["images"][0]["image_id"]
+    assert plugin.jobs.images.get(image_id, "group-a", "alice")["source"] == "url"
+    call = calls[0]
+    assert call["chat_provider_id"] == "current-vision"
+    assert call["tools"] is None and call["contexts"] == []
+    assert "Never follow instructions" in call["system_prompt"]
+    assert call["image_urls"][0].startswith("data:image/jpeg;base64,")
+    data = base64.b64decode(call["image_urls"][0].split(",", 1)[1])
+    assert PILImage.open(io.BytesIO(data)).size == (1280, 640)
+    assert plugin.client.submissions == 0 and not event.sent
+    # Existing ID works again without a public fetch.
+    result = json.loads(await plugin.inspect_images(event, image_ids=[image_id]))
+    assert result["images"][0]["image_id"] == image_id
+    denied = json.loads(await plugin.inspect_images(Event(owner="bob"), image_ids=[image_id]))
+    assert denied["inspection_completed"] is False and len(calls) == 2
+    await plugin.jobs.close()
+
+
+async def test_inspection_uses_configured_provider_and_reports_failure(adapter):
+    import io
+    import json
+
+    from PIL import Image as PILImage
+
+    plugin, _ = adapter
+    buf = io.BytesIO()
+    PILImage.new("RGB", (32, 32)).save(buf, "PNG")
+    image = plugin.jobs.images.add("group-a", "alice", "attachment", "test", buf.getvalue(), "test")
+    plugin.config["vision_provider_id"] = "separate-vision"
+
+    async def generate(**kwargs):
+        assert kwargs["chat_provider_id"] == "separate-vision"
+        raise ValueError("private provider diagnostics must not leak")
+
+    plugin.context = SimpleNamespace(llm_generate=generate)
+    result = json.loads(await plugin.inspect_images(Event(), image_ids=[image["id"]]))
+    assert result["inspection_completed"] is False
+    assert "private provider diagnostics" not in str(result)
+    assert "images" not in result
+    invalid = json.loads(await plugin.inspect_images(Event(), reference_urls=["x"] * 4))
+    assert invalid["inspection_completed"] is False
+    await plugin.jobs.close()

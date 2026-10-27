@@ -5,7 +5,7 @@ The LLM requests an image; Python submits it, monitors completion and sends the 
 back through the original AstrBot message event. No local paths, placeholder tokens,
 member shell permission or second LLM send call are needed.
 
-**Status: v0.4.1, deterministic captions and direct photo delivery.** SDK interfaces
+**Status: v0.5.0, deterministic captions and direct photo delivery.** SDK interfaces
 reviewed against AstrBot **4.29.3**; workflow nodes checked against ComfyUI **0.42.0**.
 Automated tests use mock services/events. Text generation and QQ attachment delivery
 have passed a manual deployment smoke test. Caption compositing passed a live ComfyUI synthetic-image test. New tool routing and
@@ -83,6 +83,7 @@ quality and edited outputs still need live visual validation on your deployment.
 - `comfy_edit_image(instruction, reference_urls=[], use_attached_images=true, image_ids=[])`
 - `comfy_list_images(limit=20, offset=0)`
 - `comfy_import_image(reference_url, label="")`
+- `comfy_inspect_images(image_ids=[], reference_urls=[], topic="")`
 - `comfy_process_image(operations, image_id="", deliver=true)`
 - `comfy_send_images(image_ids=[], reference_urls=[])`
 - `comfy_image_status(job_id="", retry_delivery=false, wait_seconds=0)`
@@ -147,6 +148,37 @@ reattach the image. Account-avatar retrieval is not implemented. No OneBot-speci
 is assumed. References from an older message can be reattached/quoted or provided as a URL;
 older images can instead be selected by ID from `comfy_list_images`. There is no global
 “last image” shared between users.
+
+## Inspect references before character generation
+
+For a recognizable named character, compose the tools as follows:
+
+1. Search for reference images with the shared image-search tool.
+2. Select up to three candidates and call `comfy_inspect_images` with their direct public
+   URLs or owned library IDs. The tool downloads/normalizes images under existing URL
+   restrictions and sends actual pixels to a vision-capable AstrBot provider.
+3. Read the observations and reject unsuitable toys, collages or unrelated candidates.
+   Use the returned image IDs in generation, with a short prompt consistent with the image.
+   Observations and subject hints are not verified character identities.
+
+By default inspection uses the current conversation's provider. If needed, set the plugin's
+`vision_provider_id` to an existing AstrBot vision provider ID (not a model name). No extra
+API key or endpoint is configured here; AstrBot manages the provider. The tool sends only
+an isolated observation prompt and one image per call, with no tools or conversation history.
+Pixels are encoded locally as JPEG, capped at 1280 pixels per side; providers receive no
+external URL to fetch. There are at most three images per tool call, two concurrent inspection
+batches and a 60-second timeout per provider call. Normal provider costs/latency apply.
+
+Inspection does not post reference images, start ComfyUI jobs or persist observations as
+trusted metadata. A provider failure returns an explicit error rather than guessed features.
+Model routing remains agent-driven: this is guidance and a usable tool, not an enforced
+research requirement for every generation. Simple original scenes need no search. If inspection
+fails, request a suitable reference rather than claiming visual verification. Reference-conditioned
+generation improves grounding but does not guarantee exact character likeness.
+
+Visual content and the inspector's response remain untrusted. No tools are provided to the
+inspector, but this is not an image prompt-injection detector or universal image/OCR guard.
+The selected vision provider receives these images; use an appropriate trusted provider.
 
 ## Captions, processing and existing photos
 

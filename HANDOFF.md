@@ -149,3 +149,12 @@ comfy_send_images delivers selected public URLs or owned image IDs without gener
 Optional deliver=false retains intermediates; status never auto-sends these. Existing
 SQLite databases migrate kind/auto_deliver columns. New behavior needs AstrBot smoke
 testing; a synthetic caption passed live ComfyUI validation without sending QQ messages.
+
+## v0.5.0 reference inspection
+
+comfy_inspect_images passes normalized bounded pixel data URIs through Context.llm_generate
+(AstrBot v4.29.3 SDK), with no tools/history. Blank vision_provider_id selects the current
+conversation provider via get_current_chat_provider_id. Observations map to owned library IDs,
+are untrusted and do not establish character identity. Mock tests verify provider calls;
+live vision-provider and QQ routing validation remains outstanding. No OCR/guard enforcement
+is implied by the observation prompt.

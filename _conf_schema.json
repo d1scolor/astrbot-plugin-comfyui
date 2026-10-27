@@ -54,5 +54,10 @@
     "type": "bool",
     "default": true,
     "hint": "Ends the agent turn after an image job is accepted. Disable for workflows needing further tool calls after submission. Validation errors still return normally."
+  },
+  "vision_provider_id": {
+    "description": "Optional AstrBot vision provider ID; blank uses the current conversation provider. Must support image inputs.",
+    "type": "string",
+    "default": ""
   }
 }
